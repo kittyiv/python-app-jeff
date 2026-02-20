@@ -19,7 +19,7 @@ def info():
 @app.route('/api/v1/healthz')
 
 def health():
-	# Do an actual check here
+	# Add a real dependency check here
     return jsonify({'status': 'up'}), 200
 
 if __name__ == '__main__':
