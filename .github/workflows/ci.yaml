@@ -42,8 +42,10 @@ jobs:
         shell: bash
         run: |
           echo ${{needs.docker.outputs.commit_id}}
-          pip install yq
-          yq -Yi '.image.tag = "${{needs.docker.outputs.commit_id}}"' charts/python-app/values.yaml
+          YQ_BIN="$RUNNER_TEMP/yq"
+          curl -fsSL -o "$YQ_BIN" https://github.com/mikefarah/yq/releases/download/v4.45.1/yq_linux_amd64
+          chmod +x "$YQ_BIN"
+          "$YQ_BIN" -Yi '.image.tag = "${{needs.docker.outputs.commit_id}}"' charts/python-app/values.yaml
 
       - name: Commit changes
         uses: EndBug/add-and-commit@v9
@@ -53,9 +55,10 @@ jobs:
       - name: Install argocd
         shell: bash
         run: |
-          curl -ksSL -o argocd https://argocd-server.argocd/download/argocd-linux-amd64
-          chmod +x argocd
-          sudo mv ./argocd /usr/local/bin/argocd
+          ARGOCD_BIN="$RUNNER_TEMP/argocd"
+          curl -fsSL -o "$ARGOCD_BIN" https://argocd-server.argocd/download/argocd-linux-amd64
+          chmod +x "$ARGOCD_BIN"
+          echo "$RUNNER_TEMP" >> "$GITHUB_PATH"
 
       - name: Argocd app sync
         shell: bash
