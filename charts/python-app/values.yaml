@@ -2,7 +2,7 @@ replicaCount: 1
 image:
   repository: kittyiv/python-app-jeff
   pullPolicy: IfNotPresent
-  tag: 1b9838
+  tag: 017b35
 imagePullSecrets: []
 nameOverride: ""
 fullnameOverride: ""
