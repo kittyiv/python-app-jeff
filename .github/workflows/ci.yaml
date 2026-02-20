@@ -56,7 +56,7 @@ jobs:
         shell: bash
         run: |
           ARGOCD_BIN="$RUNNER_TEMP/argocd"
-          curl -fsSL -o "$ARGOCD_BIN" https://argocd-server.argocd/download/argocd-linux-amd64
+          curl -kfsSL -o "$ARGOCD_BIN" https://argocd-server.argocd/download/argocd-linux-amd64
           chmod +x "$ARGOCD_BIN"
           echo "$RUNNER_TEMP" >> "$GITHUB_PATH"
 
