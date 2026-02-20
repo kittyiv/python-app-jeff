@@ -45,7 +45,7 @@ jobs:
           YQ_BIN="$RUNNER_TEMP/yq"
           curl -fsSL -o "$YQ_BIN" https://github.com/mikefarah/yq/releases/download/v4.45.1/yq_linux_amd64
           chmod +x "$YQ_BIN"
-          "$YQ_BIN" -Yi '.image.tag = "${{needs.docker.outputs.commit_id}}"' charts/python-app/values.yaml
+          "$YQ_BIN" e -i '.image.tag = "${{needs.docker.outputs.commit_id}}"' charts/python-app/values.yaml
 
       - name: Commit changes
         uses: EndBug/add-and-commit@v9
