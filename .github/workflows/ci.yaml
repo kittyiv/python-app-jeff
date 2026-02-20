@@ -56,9 +56,14 @@ jobs:
           message: 'Updates values.yaml with commit ${{needs.docker.outputs.commit_id}}'
 
       - name: Install argocd
-        if: ${{ secrets.ARGOCD_PASSWORD != '' }}
+        env:
+          ARGOCD_PASSWORD: ${{ secrets.ARGOCD_PASSWORD }}
         shell: bash
         run: |
+          if [ -z "$ARGOCD_PASSWORD" ]; then
+            echo "ARGOCD_PASSWORD secret is not configured. Skipping Argo CD install."
+            exit 0
+          fi
           ARGOCD_BIN="$RUNNER_TEMP/argocd"
           if ! curl -kfsSL -o "$ARGOCD_BIN" https://argocd-server.argocd/download/argocd-linux-amd64; then
             curl -fsSL -o "$ARGOCD_BIN" https://github.com/argoproj/argo-cd/releases/latest/download/argocd-linux-amd64
@@ -66,19 +71,18 @@ jobs:
           chmod +x "$ARGOCD_BIN"
           echo "$RUNNER_TEMP" >> "$GITHUB_PATH"
 
-      - name: Skip argocd sync when password is missing
-        if: ${{ secrets.ARGOCD_PASSWORD == '' }}
-        shell: bash
-        run: |
-          echo "ARGOCD_PASSWORD secret is not configured. Skipping Argo CD sync."
-
       - name: Argocd app sync
-        if: ${{ secrets.ARGOCD_PASSWORD != '' }}
+        env:
+          ARGOCD_PASSWORD: ${{ secrets.ARGOCD_PASSWORD }}
         shell: bash
         run: |
+          if [ -z "$ARGOCD_PASSWORD" ]; then
+            echo "ARGOCD_PASSWORD secret is not configured. Skipping Argo CD sync."
+            exit 0
+          fi
           argocd login argocd-server.argocd \
             --insecure  \
             --grpc-web \
             --username admin \
-            --password  ${{ secrets.ARGOCD_PASSWORD }}
+            --password "$ARGOCD_PASSWORD"
           argocd app sync python-app
