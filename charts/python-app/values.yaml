@@ -1,6 +1,6 @@
 replicaCount: 1
 image:
-  repository: ricardoandre9707/python-app
+  repository: kittyiv/python-app-jeff
   pullPolicy: IfNotPresent
   tag: 1b9838
 imagePullSecrets: []
