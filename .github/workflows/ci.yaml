@@ -56,6 +56,7 @@ jobs:
           message: 'Updates values.yaml with commit ${{needs.docker.outputs.commit_id}}'
 
       - name: Install argocd
+        if: ${{ secrets.ARGOCD_PASSWORD != '' }}
         shell: bash
         run: |
           ARGOCD_BIN="$RUNNER_TEMP/argocd"
@@ -65,7 +66,14 @@ jobs:
           chmod +x "$ARGOCD_BIN"
           echo "$RUNNER_TEMP" >> "$GITHUB_PATH"
 
+      - name: Skip argocd sync when password is missing
+        if: ${{ secrets.ARGOCD_PASSWORD == '' }}
+        shell: bash
+        run: |
+          echo "ARGOCD_PASSWORD secret is not configured. Skipping Argo CD sync."
+
       - name: Argocd app sync
+        if: ${{ secrets.ARGOCD_PASSWORD != '' }}
         shell: bash
         run: |
           argocd login argocd-server.argocd \
