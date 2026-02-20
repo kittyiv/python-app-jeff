@@ -8,7 +8,7 @@ on:
       - main
 
 permissions:
-  contents: write
+  contents: read
 
 jobs:
   docker:
@@ -36,53 +36,61 @@ jobs:
 
   cd:
     needs: docker
-    runs-on: self-hosted
+    runs-on:
+      - self-hosted
+      - linux
+      - x64
+      - python-app-jeff
     steps:
 
-      - uses: actions/checkout@v3
+      - uses: actions/checkout@v4
 
-      - name: Modify values file
+      - name: Configure kubeconfig from in-cluster service account
         shell: bash
         run: |
-          echo ${{needs.docker.outputs.commit_id}}
-          YQ_BIN="$RUNNER_TEMP/yq"
-          curl -fsSL -o "$YQ_BIN" https://github.com/mikefarah/yq/releases/download/v4.45.1/yq_linux_amd64
-          chmod +x "$YQ_BIN"
-          "$YQ_BIN" e -i '.image.repository = "kittyiv/python-app-jeff" | .image.tag = "${{needs.docker.outputs.commit_id}}"' charts/python-app/values.yaml
+          if [ -z "${KUBERNETES_SERVICE_HOST:-}" ]; then
+            echo "KUBERNETES_SERVICE_HOST is missing. Runner must run inside Kubernetes." >&2
+            exit 1
+          fi
+          cat > "$RUNNER_TEMP/kubeconfig" <<EOF
+          apiVersion: v1
+          kind: Config
+          clusters:
+          - name: in-cluster
+            cluster:
+              server: https://${KUBERNETES_SERVICE_HOST}:${KUBERNETES_SERVICE_PORT_HTTPS:-443}
+              certificate-authority: /var/run/secrets/kubernetes.io/serviceaccount/ca.crt
+          users:
+          - name: runner
+            user:
+              tokenFile: /var/run/secrets/kubernetes.io/serviceaccount/token
+          contexts:
+          - name: in-cluster
+            context:
+              cluster: in-cluster
+              user: runner
+          current-context: in-cluster
+          EOF
+          echo "KUBECONFIG=$RUNNER_TEMP/kubeconfig" >> "$GITHUB_ENV"
 
-      - name: Commit changes
-        uses: EndBug/add-and-commit@v9
-        with:
-          message: 'Updates values.yaml with commit ${{needs.docker.outputs.commit_id}}'
-
-      - name: Install argocd
-        env:
-          ARGOCD_PASSWORD: ${{ secrets.ARGOCD_PASSWORD }}
+      - name: Install Helm
         shell: bash
         run: |
-          if [ -z "$ARGOCD_PASSWORD" ]; then
-            echo "ARGOCD_PASSWORD secret is not configured. Skipping Argo CD install."
-            exit 0
-          fi
-          ARGOCD_BIN="$RUNNER_TEMP/argocd"
-          if ! curl -kfsSL -o "$ARGOCD_BIN" https://argocd-server.argocd/download/argocd-linux-amd64; then
-            curl -fsSL -o "$ARGOCD_BIN" https://github.com/argoproj/argo-cd/releases/latest/download/argocd-linux-amd64
-          fi
-          chmod +x "$ARGOCD_BIN"
+          HELM_VERSION="v3.16.4"
+          HELM_TGZ="$RUNNER_TEMP/helm.tar.gz"
+          curl -fsSL -o "$HELM_TGZ" "https://get.helm.sh/helm-${HELM_VERSION}-linux-amd64.tar.gz"
+          tar -xzf "$HELM_TGZ" -C "$RUNNER_TEMP"
+          mv "$RUNNER_TEMP/linux-amd64/helm" "$RUNNER_TEMP/helm"
+          chmod +x "$RUNNER_TEMP/helm"
           echo "$RUNNER_TEMP" >> "$GITHUB_PATH"
 
-      - name: Argocd app sync
-        env:
-          ARGOCD_PASSWORD: ${{ secrets.ARGOCD_PASSWORD }}
+      - name: Deploy with Helm
         shell: bash
         run: |
-          if [ -z "$ARGOCD_PASSWORD" ]; then
-            echo "ARGOCD_PASSWORD secret is not configured. Skipping Argo CD sync."
-            exit 0
-          fi
-          argocd login argocd-server.argocd \
-            --insecure  \
-            --grpc-web \
-            --username admin \
-            --password "$ARGOCD_PASSWORD"
-          argocd app sync python-app
+          helm upgrade --install python-app ./charts/python-app \
+            --namespace python \
+            --create-namespace \
+            --set image.repository=kittyiv/python-app-jeff \
+            --set-string image.tag=${{ needs.docker.outputs.commit_id }} \
+            --wait \
+            --timeout 5m
