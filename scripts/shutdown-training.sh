@@ -1,17 +1,26 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
 CONTEXT="kind-kind"
 INCLUDE_ARGOCD=true
+INCLUDE_BACKSTAGE=true
+TRAINING_ENV_FILE=""
 
 usage() {
   cat <<'EOF'
 Usage: shutdown-training.sh [--context <name>] [--no-argocd]
+                           [--no-backstage] [--env-file <path>]
 
 Scales down workloads used in this training environment:
 - python-app deployment (namespace: python)
 - ARC runner deployment and controller (namespace: actions-runner-system)
 - Argo CD workloads (namespace: argocd) unless --no-argocd is set
+- Backstage local container unless --no-backstage is set
+
+By default, settings are loaded from:
+- ../.env.training (relative to this script)
 EOF
 }
 
@@ -25,6 +34,14 @@ while [[ $# -gt 0 ]]; do
       INCLUDE_ARGOCD=false
       shift
       ;;
+    --no-backstage)
+      INCLUDE_BACKSTAGE=false
+      shift
+      ;;
+    --env-file)
+      TRAINING_ENV_FILE="${2:-}"
+      shift 2
+      ;;
     -h|--help)
       usage
       exit 0
@@ -37,10 +54,86 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 
+load_training_env() {
+  local env_file="$1"
+  if [[ ! -f "$env_file" ]]; then
+    return 0
+  fi
+  # shellcheck disable=SC1090
+  set -a
+  source "$env_file"
+  set +a
+  echo "Loaded training env: $env_file"
+}
+
+if [[ -z "$TRAINING_ENV_FILE" ]]; then
+  TRAINING_ENV_FILE="$SCRIPT_DIR/../.env.training"
+fi
+load_training_env "$TRAINING_ENV_FILE"
+
+BACKSTAGE_CONTAINER_NAME="${BACKSTAGE_CONTAINER_NAME:-backstage-training}"
+BACKSTAGE_IMAGE="${BACKSTAGE_IMAGE:-node:22-bookworm}"
+
 kubectl_safe() {
   if ! kubectl --context "$CONTEXT" "$@"; then
     echo "WARN: command failed: kubectl --context $CONTEXT $*" >&2
   fi
+}
+
+shutdown_backstage_container() {
+  local ids=() found=()
+
+  if [[ "$INCLUDE_BACKSTAGE" != "true" ]]; then
+    echo "Skipping Backstage shutdown (--no-backstage)."
+    return 0
+  fi
+
+  if ! command -v docker >/dev/null 2>&1; then
+    echo "WARN: docker not found. Skipping Backstage shutdown." >&2
+    return 0
+  fi
+
+  # 1) Preferred: explicit container name
+  mapfile -t ids < <(docker ps -aq --filter "name=^/${BACKSTAGE_CONTAINER_NAME}$")
+
+  # 2) Managed containers created by startup script labels
+  if [[ "${#ids[@]}" -eq 0 ]]; then
+    mapfile -t ids < <(docker ps -aq --filter "label=training.role=backstage")
+  fi
+
+  # 3) Fallback for manually started training containers
+  if [[ "${#ids[@]}" -eq 0 ]]; then
+    mapfile -t ids < <(
+      docker ps -q \
+        --filter "ancestor=${BACKSTAGE_IMAGE}" \
+        --filter "publish=3000" \
+        --filter "publish=7007"
+    )
+  fi
+
+  mapfile -t found < <(printf '%s\n' "${ids[@]}" | awk 'NF' | sort -u)
+  if [[ "${#found[@]}" -eq 0 ]]; then
+    echo "Backstage container not found (name=$BACKSTAGE_CONTAINER_NAME, image=$BACKSTAGE_IMAGE)."
+    return 0
+  fi
+
+  echo "Shutting down Backstage container(s)..."
+  for cid in "${found[@]}"; do
+    docker rm -f "$cid" >/dev/null 2>&1 || true
+    echo "  removed: $cid"
+  done
+}
+
+show_backstage_status() {
+  if ! command -v docker >/dev/null 2>&1; then
+    return 0
+  fi
+
+  docker ps --filter "name=^/${BACKSTAGE_CONTAINER_NAME}$" \
+    --format 'table {{.Names}}\t{{.Status}}\t{{.Ports}}' || true
+  docker ps \
+    --filter "label=training.role=backstage" \
+    --format 'table {{.Names}}\t{{.Status}}\t{{.Ports}}' || true
 }
 
 echo "Using context: $CONTEXT"
@@ -64,6 +157,8 @@ else
   echo "Skipping Argo CD shutdown (--no-argocd)."
 fi
 
+shutdown_backstage_container
+
 echo
 echo "Current status snapshot:"
 kubectl_safe -n python get deploy
@@ -72,5 +167,6 @@ kubectl_safe -n actions-runner-system get runnerdeployment
 if [[ "$INCLUDE_ARGOCD" == "true" ]]; then
   kubectl_safe -n argocd get deploy,sts
 fi
+show_backstage_status
 
 echo "Shutdown sequence complete."

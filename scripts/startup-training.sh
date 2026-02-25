@@ -1,17 +1,30 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
 CONTEXT="kind-kind"
 INCLUDE_ARGOCD=true
+INCLUDE_BACKSTAGE=true
+TRAINING_ENV_FILE=""
 
 usage() {
   cat <<'EOF'
 Usage: startup-training.sh [--context <name>] [--no-argocd]
+                          [--no-backstage] [--env-file <path>]
 
 Scales up workloads used in this training environment:
 - ARC runner controller + runner deployment
 - python-app deployment
 - Argo CD workloads (unless --no-argocd is set)
+- Backstage local container (unless --no-backstage is set)
+
+Backstage startup requires:
+- AUTH_GITHUB_CLIENT_ID
+- AUTH_GITHUB_CLIENT_SECRET
+
+By default, settings are loaded from:
+- ../.env.training (relative to this script)
 EOF
 }
 
@@ -25,6 +38,14 @@ while [[ $# -gt 0 ]]; do
       INCLUDE_ARGOCD=false
       shift
       ;;
+    --no-backstage)
+      INCLUDE_BACKSTAGE=false
+      shift
+      ;;
+    --env-file)
+      TRAINING_ENV_FILE="${2:-}"
+      shift 2
+      ;;
     -h|--help)
       usage
       exit 0
@@ -36,6 +57,28 @@ while [[ $# -gt 0 ]]; do
       ;;
   esac
 done
+
+load_training_env() {
+  local env_file="$1"
+  if [[ ! -f "$env_file" ]]; then
+    return 0
+  fi
+  # shellcheck disable=SC1090
+  set -a
+  source "$env_file"
+  set +a
+  echo "Loaded training env: $env_file"
+}
+
+if [[ -z "$TRAINING_ENV_FILE" ]]; then
+  TRAINING_ENV_FILE="$SCRIPT_DIR/../.env.training"
+fi
+load_training_env "$TRAINING_ENV_FILE"
+
+BACKSTAGE_CONTAINER_NAME="${BACKSTAGE_CONTAINER_NAME:-backstage-training}"
+BACKSTAGE_IMAGE="${BACKSTAGE_IMAGE:-node:22-bookworm}"
+BACKSTAGE_APP_DIR="${BACKSTAGE_APP_DIR:-$HOME/backstage-app/backstage}"
+BACKSTAGE_NODE_MODULES_VOLUME="${BACKSTAGE_NODE_MODULES_VOLUME:-backstage_node_modules}"
 
 kubectl_safe() {
   if ! kubectl --context "$CONTEXT" "$@"; then
@@ -54,6 +97,59 @@ wait_for_arc_webhook() {
   done
   echo "WARN: ARC webhook endpoint did not become ready in time." >&2
   return 1
+}
+
+start_backstage_container() {
+  local github_client_id github_client_secret
+
+  if [[ "$INCLUDE_BACKSTAGE" != "true" ]]; then
+    echo "Skipping Backstage startup (--no-backstage)."
+    return 0
+  fi
+
+  if ! command -v docker >/dev/null 2>&1; then
+    echo "WARN: docker not found. Skipping Backstage startup." >&2
+    return 0
+  fi
+
+  if [[ ! -d "$BACKSTAGE_APP_DIR" ]]; then
+    echo "WARN: Backstage app directory not found: $BACKSTAGE_APP_DIR" >&2
+    echo "      Set BACKSTAGE_APP_DIR to override. Skipping Backstage startup." >&2
+    return 0
+  fi
+
+  github_client_id="${AUTH_GITHUB_CLIENT_ID:-}"
+  github_client_secret="${AUTH_GITHUB_CLIENT_SECRET:-}"
+  if [[ -z "$github_client_id" || -z "$github_client_secret" ]]; then
+    echo "WARN: AUTH_GITHUB_CLIENT_ID / AUTH_GITHUB_CLIENT_SECRET not set." >&2
+    echo "      Skipping Backstage startup." >&2
+    return 0
+  fi
+
+  echo "Starting Backstage container..."
+  docker rm -f "$BACKSTAGE_CONTAINER_NAME" >/dev/null 2>&1 || true
+
+  if ! docker run -d \
+    --name "$BACKSTAGE_CONTAINER_NAME" \
+    --label training.role=backstage \
+    --label training.managed-by=startup-training.sh \
+    -e AUTH_GITHUB_CLIENT_ID="$github_client_id" \
+    -e AUTH_GITHUB_CLIENT_SECRET="$github_client_secret" \
+    -p 3000:3000 \
+    -p 7007:7007 \
+    -v "$BACKSTAGE_APP_DIR:/app" \
+    -v "$BACKSTAGE_NODE_MODULES_VOLUME:/app/node_modules" \
+    -w /app \
+    "$BACKSTAGE_IMAGE" \
+    bash -lc 'corepack enable >/dev/null 2>&1 || true; node .yarn/releases/yarn-4.4.1.cjs install --immutable; node .yarn/releases/yarn-4.4.1.cjs start'
+  then
+    echo "WARN: Backstage container failed to start." >&2
+    return 0
+  fi
+
+  docker ps --filter "name=^/${BACKSTAGE_CONTAINER_NAME}$" \
+    --format 'table {{.Names}}\t{{.Status}}\t{{.Ports}}' || true
+  echo "Backstage logs: docker logs -f $BACKSTAGE_CONTAINER_NAME"
 }
 
 echo "Using context: $CONTEXT"
@@ -109,5 +205,7 @@ if command -v curl >/dev/null 2>&1; then
   curl -fsS http://python-app.test.com/api/v1/info || true
   echo
 fi
+
+start_backstage_container
 
 echo "Startup sequence complete."
