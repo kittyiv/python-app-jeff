@@ -1,0 +1,25 @@
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: python-app
+  namespace: argocd
+spec:
+  project: default
+  source:
+    repoURL: https://github.com/kittyiv/python-app-jeff.git
+    targetRevision: main
+    path: charts/python-app
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: python
+  syncPolicy:
+    syncOptions:
+      - CreateNamespace=true
+      - RespectIgnoreDifferences=true
+  ignoreDifferences:
+    - group: apps
+      kind: Deployment
+      name: python-app
+      namespace: python
+      jqPathExpressions:
+        - '.spec.template.spec.containers[] | select(.name == "python-app") | .image'

@@ -52,7 +52,12 @@ If runner deployment behavior changes, keep these files and workflow labels in s
 
 Both support:
 - `--context <name>` (default `kind-kind`)
-- `--no-argocd` (skip Argo CD scaling)
+- `--argocd` (opt-in Argo CD workload scaling)
+- `--no-argocd` (explicitly disable Argo CD scaling; default behavior)
+
+Safety behavior:
+- Both scripts warn if `argocd` Application `python-app` exists, because Argo sync can override direct Helm image tags.
+- Argo app manifest is available at `k8s/argocd-python-app.yaml`.
 
 Runbook:
 - `docs/shutdown-and-restart-runbook.md`
@@ -84,4 +89,3 @@ curl -i http://python-app.test.com/api/v1/info
 - Never commit credentials.
 - If a token/password is exposed, rotate immediately.
 - Prefer env vars and GitHub Secrets over inline command values.
-

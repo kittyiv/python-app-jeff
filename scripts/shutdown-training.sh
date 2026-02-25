@@ -4,19 +4,21 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 CONTEXT="kind-kind"
-INCLUDE_ARGOCD=true
+INCLUDE_ARGOCD=false
 INCLUDE_BACKSTAGE=true
 TRAINING_ENV_FILE=""
+ARGOCD_APP_NAMESPACE="argocd"
+ARGOCD_APP_NAME="python-app"
 
 usage() {
   cat <<'EOF'
-Usage: shutdown-training.sh [--context <name>] [--no-argocd]
+Usage: shutdown-training.sh [--context <name>] [--argocd] [--no-argocd]
                            [--no-backstage] [--env-file <path>]
 
 Scales down workloads used in this training environment:
 - python-app deployment (namespace: python)
 - ARC runner deployment and controller (namespace: actions-runner-system)
-- Argo CD workloads (namespace: argocd) unless --no-argocd is set
+- Argo CD workloads (namespace: argocd) only if --argocd is set
 - Backstage local container unless --no-backstage is set
 
 By default, settings are loaded from:
@@ -32,6 +34,10 @@ while [[ $# -gt 0 ]]; do
       ;;
     --no-argocd)
       INCLUDE_ARGOCD=false
+      shift
+      ;;
+    --argocd)
+      INCLUDE_ARGOCD=true
       shift
       ;;
     --no-backstage)
@@ -77,6 +83,17 @@ BACKSTAGE_IMAGE="${BACKSTAGE_IMAGE:-node:22-bookworm}"
 kubectl_safe() {
   if ! kubectl --context "$CONTEXT" "$@"; then
     echo "WARN: command failed: kubectl --context $CONTEXT $*" >&2
+  fi
+}
+
+warn_if_argocd_app_present() {
+  if ! kubectl --context "$CONTEXT" get crd applications.argoproj.io >/dev/null 2>&1; then
+    return 0
+  fi
+  if kubectl --context "$CONTEXT" -n "$ARGOCD_APP_NAMESPACE" get application "$ARGOCD_APP_NAME" >/dev/null 2>&1; then
+    echo "WARN: Argo CD app exists: ${ARGOCD_APP_NAMESPACE}/${ARGOCD_APP_NAME}" >&2
+    echo "      This repo deploys python-app directly via Helm from CI." >&2
+    echo "      If Argo sync is run for this app, it may override deployed image tags." >&2
   fi
 }
 
@@ -137,10 +154,13 @@ show_backstage_status() {
 }
 
 echo "Using context: $CONTEXT"
+warn_if_argocd_app_present
+
 echo "Shutting down python-app workloads..."
 kubectl_safe -n python scale deploy/python-app --replicas=0
 
 echo "Shutting down ARC runner workloads..."
+kubectl_safe -n actions-runner-system patch runnerdeployment/python-app-jeff-runners --type merge -p '{"spec":{"replicas":0}}'
 kubectl_safe -n actions-runner-system scale deploy/actions-runner-controller --replicas=0
 kubectl_safe -n actions-runner-system delete pod -l runner-deployment-name=python-app-jeff-runners --ignore-not-found=true --wait=false
 
@@ -154,7 +174,7 @@ if [[ "$INCLUDE_ARGOCD" == "true" ]]; then
   kubectl_safe -n argocd scale deploy/argocd-redis --replicas=0
   kubectl_safe -n argocd scale sts/argocd-application-controller --replicas=0
 else
-  echo "Skipping Argo CD shutdown (--no-argocd)."
+  echo "Skipping Argo CD shutdown (use --argocd to enable)."
 fi
 
 shutdown_backstage_container

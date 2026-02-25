@@ -4,19 +4,21 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 CONTEXT="kind-kind"
-INCLUDE_ARGOCD=true
+INCLUDE_ARGOCD=false
 INCLUDE_BACKSTAGE=true
 TRAINING_ENV_FILE=""
+ARGOCD_APP_NAMESPACE="argocd"
+ARGOCD_APP_NAME="python-app"
 
 usage() {
   cat <<'EOF'
-Usage: startup-training.sh [--context <name>] [--no-argocd]
+Usage: startup-training.sh [--context <name>] [--argocd] [--no-argocd]
                           [--no-backstage] [--env-file <path>]
 
 Scales up workloads used in this training environment:
 - ARC runner controller + runner deployment
 - python-app deployment
-- Argo CD workloads (unless --no-argocd is set)
+- Argo CD workloads (only if --argocd is set)
 - Backstage local container (unless --no-backstage is set)
 
 Backstage startup requires:
@@ -36,6 +38,10 @@ while [[ $# -gt 0 ]]; do
       ;;
     --no-argocd)
       INCLUDE_ARGOCD=false
+      shift
+      ;;
+    --argocd)
+      INCLUDE_ARGOCD=true
       shift
       ;;
     --no-backstage)
@@ -83,6 +89,17 @@ BACKSTAGE_NODE_MODULES_VOLUME="${BACKSTAGE_NODE_MODULES_VOLUME:-backstage_node_m
 kubectl_safe() {
   if ! kubectl --context "$CONTEXT" "$@"; then
     echo "WARN: command failed: kubectl --context $CONTEXT $*" >&2
+  fi
+}
+
+warn_if_argocd_app_present() {
+  if ! kubectl --context "$CONTEXT" get crd applications.argoproj.io >/dev/null 2>&1; then
+    return 0
+  fi
+  if kubectl --context "$CONTEXT" -n "$ARGOCD_APP_NAMESPACE" get application "$ARGOCD_APP_NAME" >/dev/null 2>&1; then
+    echo "WARN: Argo CD app exists: ${ARGOCD_APP_NAMESPACE}/${ARGOCD_APP_NAME}" >&2
+    echo "      This repo deploys python-app directly via Helm from CI." >&2
+    echo "      If Argo sync is run for this app, it may override deployed image tags." >&2
   fi
 }
 
@@ -153,6 +170,7 @@ start_backstage_container() {
 }
 
 echo "Using context: $CONTEXT"
+warn_if_argocd_app_present
 
 echo "Starting ARC runner controller..."
 kubectl_safe -n actions-runner-system scale deploy/actions-runner-controller --replicas=1
@@ -182,7 +200,7 @@ if [[ "$INCLUDE_ARGOCD" == "true" ]]; then
   kubectl_safe -n argocd scale deploy/argocd-redis --replicas=1
   kubectl_safe -n argocd scale sts/argocd-application-controller --replicas=1
 else
-  echo "Skipping Argo CD startup (--no-argocd)."
+  echo "Skipping Argo CD startup (use --argocd to enable)."
 fi
 
 echo "Starting python-app..."
