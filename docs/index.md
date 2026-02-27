@@ -1,4 +1,4 @@
-# Documents for python-app
+# Documents for python-app-jeff
 
 This application has two endpoints:
 - `/api/v1/info`
