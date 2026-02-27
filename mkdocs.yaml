@@ -9,4 +9,4 @@ plugins:
 # For sidebar navigation on https://backstage.io/, see `microsite/sidebars.json`
 nav:
   - Overview:
-      - Getting started: 'docs/index.md'
+      - Getting started: 'index.md'
