@@ -72,10 +72,19 @@ load_training_env() {
   echo "Loaded training env: $env_file"
 }
 
+normalize_training_env() {
+  # Backward compatibility for typo'd key while standardizing on GITHUB_TOKEN.
+  if [[ -z "${GITHUB_TOKEN:-}" && -n "${GITHUB_TOkEN:-}" ]]; then
+    export GITHUB_TOKEN="$GITHUB_TOkEN"
+    echo "WARN: GITHUB_TOkEN is deprecated; use GITHUB_TOKEN in env file." >&2
+  fi
+}
+
 if [[ -z "$TRAINING_ENV_FILE" ]]; then
   TRAINING_ENV_FILE="$SCRIPT_DIR/../.env.training"
 fi
 load_training_env "$TRAINING_ENV_FILE"
+normalize_training_env
 
 BACKSTAGE_CONTAINER_NAME="${BACKSTAGE_CONTAINER_NAME:-backstage-training}"
 BACKSTAGE_IMAGE="${BACKSTAGE_IMAGE:-node:22-bookworm}"

@@ -76,10 +76,19 @@ load_training_env() {
   echo "Loaded training env: $env_file"
 }
 
+normalize_training_env() {
+  # Backward compatibility for typo'd key while standardizing on GITHUB_TOKEN.
+  if [[ -z "${GITHUB_TOKEN:-}" && -n "${GITHUB_TOkEN:-}" ]]; then
+    export GITHUB_TOKEN="$GITHUB_TOkEN"
+    echo "WARN: GITHUB_TOkEN is deprecated; use GITHUB_TOKEN in env file." >&2
+  fi
+}
+
 if [[ -z "$TRAINING_ENV_FILE" ]]; then
   TRAINING_ENV_FILE="$SCRIPT_DIR/../.env.training"
 fi
 load_training_env "$TRAINING_ENV_FILE"
+normalize_training_env
 
 BACKSTAGE_CONTAINER_NAME="${BACKSTAGE_CONTAINER_NAME:-backstage-training}"
 BACKSTAGE_IMAGE="${BACKSTAGE_IMAGE:-node:22-bookworm}"
@@ -117,7 +126,7 @@ wait_for_arc_webhook() {
 }
 
 start_backstage_container() {
-  local github_client_id github_client_secret
+  local github_client_id github_client_secret github_token
 
   if [[ "$INCLUDE_BACKSTAGE" != "true" ]]; then
     echo "Skipping Backstage startup (--no-backstage)."
@@ -137,6 +146,7 @@ start_backstage_container() {
 
   github_client_id="${AUTH_GITHUB_CLIENT_ID:-}"
   github_client_secret="${AUTH_GITHUB_CLIENT_SECRET:-}"
+  github_token="${GITHUB_TOKEN:-}"
   if [[ -z "$github_client_id" || -z "$github_client_secret" ]]; then
     echo "WARN: AUTH_GITHUB_CLIENT_ID / AUTH_GITHUB_CLIENT_SECRET not set." >&2
     echo "      Skipping Backstage startup." >&2
@@ -152,6 +162,7 @@ start_backstage_container() {
     --label training.managed-by=startup-training.sh \
     -e AUTH_GITHUB_CLIENT_ID="$github_client_id" \
     -e AUTH_GITHUB_CLIENT_SECRET="$github_client_secret" \
+    -e GITHUB_TOKEN="$github_token" \
     -p 3000:3000 \
     -p 7007:7007 \
     -v "$BACKSTAGE_APP_DIR:/app" \
